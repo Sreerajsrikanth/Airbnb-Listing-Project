@@ -1,0 +1,869 @@
+---
+title: "project 2nd iteration"
+output:
+  pdf_document: default
+  html_document: default
+date: "2023-12-27"
+---
+
+## This exercise/project's end stakeholders are the hosts who want to understand what qualifies as a good listing.
+
+```{r tidy = TRUE}
+#installing required libraries
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(zoo)
+library(rpart)
+library(rpart.plot)
+library(readr)
+library(nnet)
+library(caret)
+library(coefplot)
+library(pROC)
+
+```
+
+```{r echo=FALSE}
+listings <- read_csv("Desktop/CST4070/Block2/airbnb data/listings.csv/listings.csv")
+```
+
+## CONVERTING DOUBLE DATA TYPE TO NUMERIC WHEREVER NECESSARY
+
+```{r}
+listings$price <- as.numeric(gsub("[^0-9.]", "", listings$price)) 
+listings$host_acceptance_rate <- as.numeric(gsub("[^0-9.]", "", listings$host_acceptance_rate))
+listings$host_response_rate <- as.numeric(gsub("[^0-9.]", "", listings$host_response_rate))
+listings$host_id <- as.character(listings$host_id)
+listings$id <- as.character(listings$id)
+```
+
+## INCLUDING ROWS THAT ARE DEEMED NECESSARY
+
+```{r}
+# Assuming you have a data frame called 'airbnb'
+columns_to_include <- c("id","host_id","neighbourhood_cleansed","host_response_time","host_response_rate","host_acceptance_rate","host_identity_verified","host_has_profile_pic","host_is_superhost","property_type","room_type","accommodates","bathrooms","beds","amenities","price","minimum_nights","maximum_nights","minimum_minimum_nights","minimum_nights_avg_ntm","calendar_updated","has_availability","availability_30","availability_60","availability_90","availability_365","calendar_last_scraped","number_of_reviews","number_of_reviews_ltm","number_of_reviews_l30d","first_review","last_review","review_scores_rating","review_scores_accuracy","review_scores_cleanliness","review_scores_checkin","review_scores_communication","review_scores_location","review_scores_value","instant_bookable","calculated_host_listings_count","reviews_per_month", "price")  # Replace with the actual column names you want to remove
+
+# Create a new data frame without the specified columns
+listings_filtered <- listings[, (names(listings) %in% columns_to_include)]
+
+```
+
+```{r}
+# Create a box plot for the 'price' variable using ggplot2
+ggplot(listings_filtered, aes(x = 1, y = price, fill = factor(1))) +
+  geom_boxplot() +  # Plot a box plot
+  labs(title = "Box plot of Price", y = "Price") +  # Set plot title and y-axis label
+  theme_minimal() +  # Use a minimal theme
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank()) +  # Remove x-axis labels and ticks
+  scale_fill_manual(values = "skyblue")  # Set the fill color for the box plot
+
+
+```
+
+```{r}
+summary(listings_filtered$price)
+```
+
+## Removing Outliers in Price:
+
+--\> The upper bound of the Price column is removed given there is a stark difference between 3rd Quartile and Maximum. The right-skewed nature of the Price column and from domain understanding, we can infer that there are a lot of listings which can be deemed luxurious. These luxurious listings would not follow the usual business model of most listings since:
+
+1.  They are catered mostly to the section of wealthy individuals
+
+2.  These are high price-low volume business listings which wouldn't follow the trend of most other listings here.
+
+3.  Most of the listings are under the price of 200\$. These listings cater to 80-90% of the target audience which is what will be considered for the upcoming task.
+
+```{r}
+q <- quantile(listings_filtered$price)
+lower_bound <- q["25%"] - 1.5 * IQR(listings_filtered$price)
+upper_bound <- q["75%"] + 1.5 * IQR(listings_filtered$price)
+listings_fprice <- subset(listings_filtered, price <= upper_bound)
+summary(listings_fprice$price)
+```
+
+```{r}
+# Create a box plot for the 'price' variable using ggplot2
+ggplot(listings_fprice, aes(x = 1, y = price, fill = factor(1))) +
+  geom_boxplot() +  # Plot a box plot
+  labs(title = "Box plot of Price", y = "Price") +  # Set plot title and y-axis label
+  theme_minimal() +  # Use a minimal theme
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank()) +  # Remove x-axis labels and ticks
+  scale_fill_manual(values = "skyblue")  # Set the fill color for the box plot
+
+```
+
+TASK-1: Generate a categorical variable from the relevant features available in the airbnb dataset that would indicate how good a listing is.
+
+To accomplish this, we would need to initially understand the dataset in a holistic manner.
+
+# Exploratory Data Analysis
+
+### Accommodates:
+
+```{r}
+summary(listings_fprice$accommodates)
+```
+
+```{r}
+hist(listings_fprice$accommodates, main = "Distribution of Accommodates", xlab = "Accommodates", col = "skyblue", border = "black")
+```
+
+The "Accommodates" variable is defined as the number of people each listing can host. From the summary and the histogram of the same, we are able to identify that most listings accommodate 2 people. Considering most travelers holiday as a family or a couple, most affordable hotels/listings/accommodations cater to this demographic of people.
+
+### Room Type
+
+```{r}
+# Summarize the number of listings by room type using dplyr
+room_type <- listings_fprice %>%
+  group_by(room_type) %>%
+  summarise(
+    Number_of_listings = n()
+  )
+
+# Create a bar plot using ggplot2
+ggplot(room_type, aes(x = room_type, y = Number_of_listings, fill = room_type)) +
+  geom_bar(stat = "identity") +  # Plot bars based on the Number_of_listings
+  geom_text(aes(label = Number_of_listings), vjust = -0.5, color = "black", size = 3) +  # Display count labels on top of the bars
+  labs(title = "Number of Properties by Room Type",  # Set plot title
+       x = "Room Type",  # Set x-axis label
+       y = "Count") +  # Set y-axis label
+  theme_minimal() +  # Use a minimal theme
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate x-axis labels for better readability
+
+```
+
+### Why are "Entire home/apt" and "Private Room" are in high numbers in this column?
+
+As we can see from the "room_type" , The number of entire home/apt has the highest number of listings followed by Private Room. This is a major part of the Airbnb business as it was introduced as a\
+"hotel chain disruptor".
+
+Affordable staying for tourists was a major need before Airbnb came into the picture. Mid-tier hotels used to charge prices that were not affordable by most travelling consumers and staying costs took a major chunk out of the travel budget for consumers. On the other hand, there were unused rooms/spaces/properties which were not used by most property-owners.
+
+Airbnb created a common platform for tourist and property owners(hosts) of residential spaces for tourists to be able to get affordable staying through Airbnb.
+
+This is why we see a lot "Entire home/apt" and "Private Room" in our dataset.
+
+### What are the implications of using this column?
+
+Since there is an uneven number of listings steering toward two classes here, using this column for either scoring or modelling will create an unnecessary bias. Therefore, this column will be neglected from being used in the model or scoring.
+
+## Superhost:
+
+A superhost, by Airbnb's definition, "Airbnb Superhosts are the top-rated, most experienced hosts on Airbnb, committed to providing you with outstanding hospitality."
+
+Each host is judged on their hospitality every 3 months. They're highly rated, experienced, reliable, and responsive.
+
+```{r}
+# Summarize host-related information using dplyr
+host_summary <- listings_fprice %>%
+  group_by(host_id) %>%
+  summarise(
+    num_properties = n(),          # Number of properties listed by each host
+    avg_price = mean(price),       # Average price of properties listed by each host
+    total_reviews = sum(number_of_reviews),
+    host_is_superhost = first(host_is_superhost)  # Superhost status of each host
+  )
+
+# Count the occurrences of each unique value in host_is_superhost
+value_counts <- table(host_summary$host_is_superhost)
+
+# Create a bar plot with counts displayed
+barplot(value_counts, col = c("skyblue", "salmon"), main = "Host is Superhost",
+        xlab = "Superhost Status", ylab = "Frequency", names.arg = c("FALSE", "TRUE"))
+
+# Display counts on the bars
+text(x = barplot(value_counts, plot = FALSE), y = value_counts + 0.1, label = value_counts, col = "black", pos = 1)
+
+```
+
+From the above histogram, we understand it is challenging to be given the "Superhost" tag. Since this is directly correlated to being highly rated, and being highly responsive, this column is taken as a proxy to the other factors, "review_scores_rating" and "review_scores_communication".
+
+Since, the number of "False" far outweighs the number of "True", we'll be digging deeper in our bivariate and multivariate analysis about how we can address this disproportion in this data set.
+
+## Amenities:
+
+From a host perspective, offering the right amenities that contributes to more customers coming in and satisfying the customers is necessary. The following code talks about the coverage of top 30 amenities.
+
+```{r}
+# Select relevant columns from the data frame and create a new column 'amenities_list'
+amenities_df <- listings_fprice %>%
+  select(id, amenities, price, number_of_reviews, review_scores_rating) %>%
+  mutate(
+    # Remove unwanted characters and split the 'amenities' string into a list
+    amenities_list = strsplit(gsub("['\" ]", "", substr(amenities, 2, nchar(amenities) - 1)), ",")
+  )
+
+# Unnest the 'amenities_list' to create separate rows for each amenity
+all_amenities <- amenities_df %>%
+  unnest(amenities_list) %>%
+  # Group by the 'amenities_list' and calculate the coverage percentage
+  group_by(amenities_list) %>%
+  summarise(
+    coverage = round(n() * 100 / nrow(amenities_df))
+  ) %>%
+  arrange(desc(coverage))
+top_30_amenities <- head(all_amenities, 30)# Arrange the results in descending order of coverage
+ggplot(top_30_amenities,aes(x = reorder(amenities_list, -coverage), y = coverage, fill = coverage)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = coverage), vjust = -0.5, color = "black", size =1.5) +
+  labs(title = "Top 30 Amenities Coverage", x = "Amenity", y = "Coverage Percentage") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+From this histogram graph, we are able to infer the amenities of "Kitchen", "Wifi", "Smokealarm", and "Essentials" are there in more than 80% of the listings. These amenities can be deemed as mandatory as they are required for the basic safety and staying purposes of the guests. If not for these amenities, guests are less likely to choose the listing for their stay.
+
+The amenities in this list that have a coverage of more than 50% will be taken into consideration for the creation of the dependent variable and inherently for the modelling as well.
+
+## BiVariate Analysis:
+
+### Analysis of Price by considering each neighbourhood
+
+Airbnb prices near London's tourist attractions like Westminster, the City of London, and Chelsea are higher due to more tourists want to stay close to landmarks, increasing demand and thereby higher prices. The proximity to attractions, and transportation justifies the higher price. During peak seasons, Fewer options would be available near attractions due to high demand and thereby prices would be higher. Competitive markets influence hosts to align their prices with neighboring listings.
+
+```{r}
+# Group the data by neighborhood and calculate summary statistics
+neighbourhood <- listings_fprice %>%
+  group_by(neighbourhood_cleansed) %>%
+  summarise(
+    Number_of_Rooms = n(),
+    Average_Price = mean(price, na.rm = TRUE),
+    Number_of_reviews = sum(number_of_reviews, na.rm = TRUE)
+  )
+
+# Calculate reviews per property
+neighbourhood$reviews_per_property = neighbourhood$Number_of_reviews / neighbourhood$Number_of_Rooms
+
+# Create a bar plot with labels
+ggplot(neighbourhood, aes(x = neighbourhood_cleansed, y = Average_Price, fill = Average_Price)) +
+  geom_bar(stat = "identity", color = "black", alpha = 0.7) +
+  
+  # Add text labels for average price
+  geom_text(aes(label = round(Average_Price)), 
+            position = position_dodge(width = 0.9), 
+            vjust = -0.5, size = 1.5, color = "black") + 
+  
+  # Set plot title and axis labels
+  labs(title = "Average Price Across Neighborhoods",
+       x = "Neighborhood",
+       y = "Average Price",
+       fill = "Neighborhood") +
+  
+  # Customize x-axis text orientation
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+ # Rotating x-axis labels for better visibility
+```
+
+From this we understand that the properties are competing with each other in these areas to get to the right price for their listing to attract customers while also covering the operational costs through the price that is being set. Therefore competitive pricing becomes a major factor to be considered for the dependent variable.
+
+### Analysis of Number of Properties by considering each neighbourhood cleansed
+
+```{r}
+# Create a bar plot for the number of rooms across neighborhoods
+ggplot(neighbourhood, aes(x = neighbourhood_cleansed, y = Number_of_Rooms, fill = Number_of_Rooms)) +
+
+  # Plot bars
+  geom_bar(stat = "identity", color = "black", alpha = 0.7) +
+  
+  # Add text labels for the number of rooms
+  geom_text(aes(label = Number_of_Rooms), 
+            position = position_dodge(width = 0.9), 
+            vjust = -0.5, size = 2, color = "black") + 
+  
+  # Set plot title and axis labels
+  labs(title = "Listings Across Neighborhoods",
+       x = "Neighborhood",
+       y = "Listings",
+       fill = "Listing count") +
+  
+  # Customize x-axis text orientation
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+So from the above graph we see Westminister has the highest number of properties, followed by certain neighbourhoods such as Hackney, Camden, Tower Hamlets, Chelsea having 4000-6000 properties.
+
+Comparing the "Listings Across Neighbourhoods" and "Average Price Across Neighbourhoods" histograms, we can understand that for most Neighbourhoods, lesser the number of lisitngs in the neighbourhood, lesser the average Price.
+
+This is also in accordance with the usual Demand and Price economics where we see when there is more demand for a product, the more the price of the product will be.
+
+We can observe a linear positive correlation between Average Price and Number of Listings each neighbourhood has. This is indicative of how important both Price and the Number of Listings(both with respect to the Neighbourhood) are for the scoring of how good a listing is from the perspective of a potential or existing host.
+
+```{r}
+# Create a scatter plot of Average Price vs Number of Rooms
+ggplot(neighbourhood, aes(x = Average_Price, y = Number_of_Rooms, label = neighbourhood_cleansed)) +
+  
+  # Plot points
+  geom_point() + 
+  
+  # Add text labels for each point
+  geom_text(vjust = -0.5, hjust = 0.5, size = 1.5) +
+  
+  # Set plot title and axis labels
+  labs(title = "Scatter Plot of Avg Price vs Number. of Rooms",
+       x = "Average Price",
+       y = "Number of Rooms") +
+  
+  # Use a minimal theme
+  theme_minimal()
+```
+
+```{r}
+# Create a bar plot for the number of reviews per property across neighborhoods
+ggplot(neighbourhood, aes(x = neighbourhood_cleansed, y = reviews_per_property, fill = reviews_per_property)) +
+
+  # Plot bars
+  geom_bar(stat = "identity", color = "black", alpha = 0.7) +
+  
+  # Add text labels for the rounded number of reviews per property
+  geom_text(aes(label = round(reviews_per_property)), 
+            position = position_dodge(width = 0.9), 
+            vjust = -0.5, size = 2, color = "black") + 
+  
+  # Set plot title and axis labels
+  labs(title = "Number of Reviews Per Property Across Neighborhoods",
+       x = "Neighborhood",
+       y = "Reviews per Property",
+       fill = "Reviews Per Property") +
+  
+  # Customize x-axis text orientation
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+```{r}
+# Summarize data for each host
+host_summary <- listings_fprice %>%
+  group_by(host_id) %>%
+  summarise(
+    num_properties = n(),          # Number of properties listed by each host
+    avg_price = mean(price),       # Average price of properties listed by each host
+    total_reviews = sum(number_of_reviews),
+    host_is_superhost = first(host_is_superhost)  # Host superhost status
+  ) %>%
+  # Arrange the data by descending order of total_reviews
+  arrange(desc(total_reviews))
+
+```
+
+From understanding about the dataset, we understand that roughly 80% of the hosts have only 1 listing in this dataset. Therefore, looking through the Superhost column for these single property owned hosts, we see that roughly 10% of them are superhosts. When we look through hosts with multiple listings, we understand that roughly 20% of them are superhosts.
+
+### What is the reason for this?
+
+As previously stated, Airbnb evaluates hosts every 3 months for the superhost status with regards to hospitality, rating from the customers. So naturally, a host with multiple listings could have more experience and better rating thereby giving them a better chance at receiving the superhost tag than hosts with single properties.
+
+```{r}
+hosts_with_single_property <- host_summary %>%
+  filter(num_properties == 1)
+
+value_counts <- table(hosts_with_single_property$host_is_superhost)
+
+# Create a bar plot with counts displayed
+barplot(value_counts, col = c("skyblue", "salmon"), main = "Host is Superhost",
+        xlab = "Superhost Status", ylab = "Frequency", names.arg = c("FALSE", "TRUE"))
+
+# Display counts on the bars
+text(x = barplot(value_counts, plot = FALSE), y = value_counts + 0.1, label = value_counts, col = "black", pos = 1)
+```
+
+```{r}
+hosts_with_multiple_property <- host_summary %>%
+  filter(num_properties != 1) %>%
+  filter(total_reviews > 0) %>%
+  filter(avg_price > 1)
+
+value_counts <- table(hosts_with_multiple_property$host_is_superhost)
+
+# Create a bar plot with counts displayed
+barplot(value_counts, col = c("skyblue", "salmon"), main = "Host is Superhost",
+        xlab = "Superhost Status", ylab = "Frequency", names.arg = c("FALSE", "TRUE"))
+
+# Display counts on the bars
+text(x = barplot(value_counts, plot = FALSE), y = value_counts + 0.1, label = value_counts, col = "black", pos = 1)
+```
+
+### TASK-1: CREATING A DEPENDENT CATEGORICAL VARIABLE TO PREDICT WHETHER A LISTING IS BAD, AVERAGE OR GOOD.
+
+There are multiple factors to decide whether a listing is bad, average or good from a hosts' perspective, therefore creating a score for each of these factors, and aggregating them is the direction I believe is right for this project. These multiple attributes are
+
+Host Attributes:
+
+a.  Superhost
+
+b.Host Ratings
+
+Property Attributes:
+
+a.  Amenities
+
+b.  Accommodates
+
+c.  Property Ratings
+
+Pricing:
+
+a.  Competitive Pricing
+
+## HOST ATTRIBUTES:
+
+### Superhost:
+
+As we have seen previously, Hosts with single property having the superhost status is more challenging to achieve while hosts having multiple properties not having the superhost status is slightly concerning. Therefore the scoring using superhosts is as follows:
+
+1.  Superhost with Single Property - 8
+
+2.  Superhost with Multiple Properties - 6
+
+3.  Non Superhosts with Single Properties - 4
+
+4.  Non Superhosts with Multiple Properties - 2
+
+    The reason for such scores for non superhosts is because non-superhosts with single properties is more prevalent in the dataset while non superhosts with multiple properties, despite getting audited for the same and despite having multiple listings have failed to get the tag of a superhost which reduces their credibility as a host.
+
+```{r}
+# Filter hosts with only one property
+hosts_with_single_property <- host_summary %>%
+  filter(num_properties == 1)
+
+# Create the superhost_score column
+hosts_with_single_property <- hosts_with_single_property %>%
+  mutate(
+    superhost_score = ifelse(is.na(host_is_superhost), 0, ifelse(host_is_superhost, 6, 4))
+  )
+
+```
+
+```{r}
+# Filter hosts with multiple properties
+hosts_with_multiple_property <- host_summary %>%
+  filter(num_properties != 1) %>%
+  filter(total_reviews > 0) %>%
+  filter(avg_price > 1)
+
+# Create the superhost_score column
+hosts_with_multiple_property <- hosts_with_multiple_property %>%
+  mutate(
+    superhost_score = ifelse(is.na(host_is_superhost), 0, ifelse(host_is_superhost, 8, 2))
+  )
+```
+
+```{r}
+# Combine information for hosts with single and multiple properties
+host_summary = rbind(hosts_with_single_property, hosts_with_multiple_property) 
+
+# Select specific columns in host_summary
+host_summary <- host_summary[, c("host_id", "superhost_score", "num_properties")]
+
+# Merge host_summary with listings_fprice based on host_id
+listings_fprice <- left_join(host_summary, listings_fprice, by = "host_id") 
+
+# Reorder columns in listings_fprice, placing superhost_score at the end
+listings_fprice <- listings_fprice %>%   
+  select(-superhost_score, everything(), superhost_score)
+```
+
+### Host Reviews:
+
+The ratings given to the hosts by the customers tells about how responsive the hosts were while the customers stayed and how seemless the process of checking in and out was.
+
+Looking at the Average reviews, we understand that most hosts get above 4 and the 25th percentile of review for the hosts is at 4 therefore, the hosts that fall below the 25th percentile can be considered poor.
+
+While Average reviews might be deemed enough, the number of reviews in the last twelve months(num_of_reviews_ltm) matter as well as a form of reliability because a host getting reviewed a maximum score of 5 by 1 customer cannot be reliable since it is a smaller sample size while a host getting a 4.5 by 10 customers is more reliable and more preferred as well. Therefore a column called, “host Score” is created to score the hosts which is the multiplication of the average review from the customers (communication and checkin) and the number of reviews left in the last twelve months.
+
+The range of values from the, "Review Total" is majorly uneven and steered toward the left. To tackle this, we use log to scale down this variable while retrieving most of the information.
+
+Despite scaling down the variable, there is a lot of noise and unevenness in the data (especially for values below 3) for which a smoothening function ie a moving average function is applied for values below than 3. This method is usually applied for time-series based data but in this case since there are similar characteristics between hosts such as number of properties owned in that region(log(Review Total) \<3) , this moving average function would help to even out the variable and give an almost normal distribution
+
+This smoothened log transformed variable is called, "smoothed_log_transformed_host_score".
+
+Similar principle has been applied using the property's rating as well. The variable for it is called, "smoothed_log_transformed_listing_score".
+
+```{r}
+# Summarize host identity information
+host_identity_summary <- listings_fprice %>%
+  group_by(host_id) %>% 
+  summarise(
+    num_properties = n(),
+    total_reviews = sum(number_of_reviews),
+    total_reviews_ltm = sum(number_of_reviews_ltm),
+    tot_rev_per_property_ltm = sum(number_of_reviews_ltm) / n(),
+    avg_scores_communication = mean(review_scores_communication, na.rm = TRUE),
+    avg_scores_checkin = mean(review_scores_checkin, na.rm = TRUE)
+  )
+
+# Calculate a composite host review metric
+host_identity_summary <- host_identity_summary %>%
+  mutate(
+    Host_reviews = (avg_scores_communication + avg_scores_checkin) / 2
+  )
+
+# Calculate a host review score based on the composite metric and total reviews
+host_identity_summary <- host_identity_summary %>%
+  mutate(
+    Host_review_score = Host_reviews * tot_rev_per_property_ltm
+  )
+
+# Log-transform the host review score
+host_identity_summary <- host_identity_summary %>%
+  mutate(
+    host_review_score_log = log(Host_review_score + 1)
+  )
+```
+
+```{r}
+# Create a density plot of the log-transformed host review score
+ggplot(host_identity_summary, aes(x = host_review_score_log)) +
+  geom_density(fill = "blue", color = "black", alpha = 0.7) + 
+  labs(title = "Density Plot of Log-Transformed Host Review Score",
+       x = "",
+       y = "Log-Transformed Host Score") +
+  theme_minimal()
+```
+
+```{r}
+# Create a smoothed version of the host review score in host_identity_summary
+smoothed_host_identity_summary <- host_identity_summary %>%
+  mutate(
+    smoothed_log_transformed_host_score = ifelse(host_review_score_log <= 3,
+                                                  rollmean(host_review_score_log, k = 3, fill = NA),
+                                                  host_review_score_log)
+  )
+
+# Create a density plot comparing the original and smoothed curves
+ggplot(smoothed_host_identity_summary, aes(x = smoothed_log_transformed_host_score)) +
+  geom_density(fill = "blue", color = "black", alpha = 0.7) +
+  labs(title = "Original Curve vs Smoothed Curve (Left Side)", x = "x", y = "y")
+
+# Perform a left join with listings_fprice based on host_id
+listings_fprice <- left_join(smoothed_host_identity_summary, listings_fprice, by = "host_id")
+
+```
+
+### Listing Review:
+
+Similar principle that was applied to Host Score has been applied here for the property's rating as well. The variable for it is called, "smoothed_log_transformed_listing_score".
+
+```{r}
+# Calculate a new variable Review_total as the product of review_scores_rating and number_of_reviews_ltm
+listings_fprice$Review_total <- listings_fprice$review_scores_rating * listings_fprice$number_of_reviews_ltm
+
+# Replace NA values in Review_total with 0
+listings_fprice$Review_total[is.na(listings_fprice$Review_total)] <- 0
+
+# Perform a log transformation on Review_total and create a new variable log_transformed_listing_score
+listings_fprice <- listings_fprice %>%
+  mutate(
+    log_transformed_listing_score = log(Review_total + 1)
+  )
+
+# Create a smoothed version of the log-transformed variable
+listings_fprice <- listings_fprice %>%
+  mutate(
+    smoothed_log_transformed_listing_score = ifelse(log_transformed_listing_score < 3,
+                                                     rollmean(log_transformed_listing_score, k = 3, fill = NA),
+                                                     log_transformed_listing_score)
+  )
+```
+
+## Competitive Pricing:
+
+One of the major talking points for any host is to price for their listing appropriately. This is possible only when understanding the demand and pricing of the listings in a certain region.
+
+When potential customers scour through to book an airbnb listing, one of the factors that come into play is the region. For simplicity's sake, we consider the column "neighbourhood_cleansed" from this dataset.
+
+If a listing is priced lesser in comparison to other similar listings, then chances of that listing getting booked is higher. This principle is what is applied to competitive pricing.
+
+We consider the 25th, 50th, and 75th percentiles of the price of the properties in certain neighbourhoods, compare it to the listing in question, and consider the number of properties in that particular region to come up with two scores, "competitive_price" and "Pricing_Importance".
+
+#### Competitive_Price:
+
+This is a categorical variable that has a hierarchy, Prices below 25th percentile of the region is considered as 4, between 25th and 50th is considered 3, between 50th and 75th is considered 2 and above 75th as 1.
+
+Lower the Price better the score is the idea behind this column.
+
+#### Pricing Importance:
+
+If the number of properties in a certain region is very less, then the point of competitive pricing becomes redundant as those areas with lesser number of properties do not face a lot of competition when in comparison regions that attracts a lot of tourists and has a higher number of properties in that region. This Pricing Importance Variable exactly covers that. To make sure to achieve competitive pricing in areas of high density and to give less importance to pricing when it comes to regions having lower density of properties.
+
+The Pricing Importance is a categorical variable having 8 classes(class 1 for when number of listings in that region is less than the 30th percentile of number of overall listings, class 2 for when between 30th and 40th and so on till class 8 when it is above 90th percentile.
+
+```{r}
+# Summarize neighborhood-level information
+neighbourhood <- listings_fprice %>%
+  group_by(neighbourhood_cleansed) %>%
+  summarise(
+    num_properties = n(),
+    total_reviews_ltm = sum(number_of_reviews_ltm),
+    percentile_25_price = quantile(price, 0.25, na.rm = TRUE),
+    median_price = median(price, na.rm = TRUE),
+    percentile_75_price = quantile(price, 0.75, na.rm = TRUE)
+  ) %>%
+  mutate(
+    review_per_property = total_reviews_ltm / num_properties
+  ) %>%
+  arrange(desc(num_properties))
+
+# Select specific columns in the neighborhood summary
+neighbourhood <- neighbourhood[, c("neighbourhood_cleansed", "num_properties", "percentile_25_price", "median_price", "percentile_75_price")]
+
+# Perform a left join with listings_fprice based on neighbourhood_cleansed
+listings_fprice <- left_join(neighbourhood, listings_fprice, by = c("neighbourhood_cleansed"))
+
+```
+
+```{r}
+# Create a new variable competitive_price based on price ranges
+listings_fprice <- listings_fprice %>%
+  mutate(
+    competitive_price = case_when(
+      price < percentile_25_price ~ 4,
+      price >= percentile_25_price & price < median_price ~ 3,
+      price >= median_price & price < percentile_75_price ~ 2,
+      price >= percentile_75_price ~ 1,
+      TRUE ~ NA_integer_
+    )
+  )
+
+```
+
+```{r}
+# Calculate percentiles for the num_properties variable in the neighbourhood dataset
+percentiles <- mutate(neighbourhood,
+  percentile_10 = quantile(num_properties, 0.10, na.rm = TRUE),
+  percentile_20 = quantile(num_properties, 0.20, na.rm = TRUE),
+  percentile_30 = quantile(num_properties, 0.30, na.rm = TRUE),
+  percentile_40 = quantile(num_properties, 0.40, na.rm = TRUE),
+  percentile_50 = quantile(num_properties, 0.50, na.rm = TRUE),
+  percentile_60 = quantile(num_properties, 0.60, na.rm = TRUE),
+  percentile_70 = quantile(num_properties, 0.70, na.rm = TRUE),
+  percentile_80 = quantile(num_properties, 0.80, na.rm = TRUE),
+  percentile_90 = quantile(num_properties, 0.90, na.rm = TRUE),
+  percentile_100 = quantile(num_properties, 1.0, na.rm = TRUE)
+)
+```
+
+```{r}
+# Create a new variable Pricing_importance based on percentiles of num_properties
+percentiles <- percentiles %>%
+  mutate(
+    Pricing_importance = case_when(
+      num_properties < percentile_30 ~ 1,
+      num_properties >= percentile_30 & num_properties < percentile_40 ~ 2,
+      num_properties >= percentile_40 & num_properties < percentile_50 ~ 3,
+      num_properties >= percentile_50 & num_properties < percentile_60 ~ 4,
+      num_properties >= percentile_60 & num_properties < percentile_70 ~ 5,
+      num_properties >= percentile_70 & num_properties < percentile_80 ~ 6,
+      num_properties >= percentile_80 & num_properties < percentile_90 ~ 7,
+      num_properties >= percentile_90 ~ 8,
+      TRUE ~ NA_integer_
+    )
+  )
+percentiles <- subset(percentiles, select=c(neighbourhood_cleansed,Pricing_importance))
+# Left join percentiles dataset with listings_fprice based on neighbourhood_cleansed
+listings_fprice <- left_join(percentiles, listings_fprice, by = "neighbourhood_cleansed")
+
+```
+
+```{r}
+# Reorder columns in listings_fprice dataset
+listings_fprice <- listings_fprice %>%
+  select(-Pricing_importance, everything(), Pricing_importance)
+
+# Create a new variable competitive_price_importance
+listings_fprice$competitive_price_importance = listings_fprice$competitive_price * listings_fprice$Pricing_importance
+
+# Generate a histogram to visualize the distribution of competitive_price_importance
+hist(listings_fprice$competitive_price_importance, main = "Histogram of Competitive Price Importance", xlab = "Competitive Price Importance")
+
+```
+
+### Amenities:
+
+Referring back to this coverage of Amenities, and understanding the availability of certain amenities for potential customers, it is important to consider Amenities into scoring of the overall listing.
+
+Since R was not able to get the amenities column in the desired manner, I switched to Python to score the Amenities. The Amenities that have more than 80% coverage is considered to be most important for customers, therefore each amenity is given a score of 2. Amenities with 60-80% coverage are given a score of 1 each and between 50 and 60 is given a score 0.5 each.
+
+Then we categorize the scoring of amenities into 4 categories after considering the nature of distribution of the scoring (where the distribution is very left modal/right skewed).
+
+```{r}
+write.csv(listings_fprice, "listings_fprice.csv", row.names = FALSE)
+```
+
+```{r}
+amenities_df = subset(listings_fprice, select = c(id, amenities))
+write.csv(amenities_df, "amenities.csv", row.names = FALSE)
+```
+
+``` python
+import pandas as pd
+amenities = pd.read_csv('amenities.csv')
+reference_list = ["Smoke_alarm", "Kitchen", "Wifi","Essentials","Iron","Hotwater","Hangers","Hairdryer","Dishes and silverware","Carbon monoxide alarm","Refrigerator","Bed linens","Cooking basics","Washer","Microwave","Heating","Shampoo","Hot water kettle","Dedicated workspace","TV","Cleaning products"]
+for elem in reference_list:
+    amenities[f'contains_{elem}'] = amenities['amenities'].apply(lambda amenities: elem in amenities)
+amenities['contains_Smoke alarm'] = amenities['contains_Smoke alarm'].replace({True: 2, False: 0})
+amenities['contains_Kitchen'] = amenities['contains_Kitchen'].replace({True: 2, False: 0})
+amenities['contains_Wifi'] = amenities['contains_Wifi'].replace({True: 2, False: 0})
+amenities['contains_Essentials'] = amenities['contains_Essentials'].replace({True: 2, False: 0})
+amenities.iloc[:, 5:11] = amenities.iloc[:, 5:11].apply(lambda x: x.astype(int))
+amenities.iloc[:, 11:] = amenities.iloc[:, 11:].apply(lambda x: x.map({True: 0.5, False: 0}))
+amenities['amenities_score'] = amenities.iloc[:, 2:15].sum(axis=1)
+listing_fprice["id"] = listing_fprice["id"].astype(str)
+amenities["id"] = amenities["id"].astype(str)
+listings_fprice_amenities = pd.merge(listing_fprice, amenities, on='id', how='left')
+
+listings_fprice_amenities.to_csv('listings_fprice_amenities.csv', index=False)
+```
+
+```{r}
+listings_fprice_amenities <- read_csv("listings_fprice_amenities.csv")
+```
+
+```{r}
+listings_fprice_amenities <- listings_fprice_amenities %>%
+  mutate(
+    amenities_score_tiers = case_when(
+      amenities_score > 12.5 ~ 4,
+      amenities_score >= 11 & amenities_score < 12.5 ~ 3,
+      amenities_score >= 8 & amenities_score < 11 ~ 2,
+      amenities_score < 8 ~ 1,
+      TRUE ~ NA_integer_
+    )
+  ) %>%
+  mutate(
+    amenities_score_tiers = ifelse(is.na(amenities_score_tiers), 0, amenities_score_tiers)
+  )
+```
+
+```{r}
+summary(listings_fprice)
+```
+
+### FINAL SCORE:
+
+Summing all the scoring variables and looking at the summary, we understand because of certain factors like zero number of reviews, 0 rating, there are a lot of NAs coming from this dataset. Most of these NAs come from the Superhost status not being available.
+
+From what I have understood from the dataset, the Superhost variable is very important for scoring of a listing without which all the other factors are deemed unreliable as well. So it is wise to remove these listings from the modelling and scoring despite this being roughly 25% of the total dataset.
+
+The Final Score is ranging from a min of 5.5 till a maximum value of 65 with maximum achievable score being 73. Then we categorize the listing based on which range of the final score this belong to.
+
+Overall the Final Score is primarily dependent on price, number of properties, host ratings, property ratings and amenities offered by the amenities.
+
+```{r}
+listings_fprice_amenities$final_score <- listings_fprice_amenities$smoothed_log_transformed_host_score+listings_fprice_amenities$smoothed_log_transformed_listing_score + listings_fprice_amenities$competitive_price_importance + listings_fprice_amenities$amenities_score + listings_fprice_amenities$superhost_score
+summary(listings_fprice_amenities$final_score)
+```
+
+```{r}
+hist(listings_fprice_amenities$final_score, main = "Final score distribution", xlab = "Final Score")
+
+```
+
+### CATEGORIZATION OF FINAL SCORE:
+
+```{r}
+listings_fprice_amenities <- listings_fprice_amenities %>%
+  mutate(
+    Final_score_tier = case_when(
+      final_score < 28 ~ 3,
+      
+      final_score >= 28 & final_score <= 42  ~ 2,
+      
+      final_score > 42  ~1,
+      
+      TRUE ~ NA_integer_
+    )
+  )
+
+
+```
+
+### SELECTING NECESSARY VARIABLES FROM THE FINAL DATASET FOR MULTINORM LOGISTIC REGRESSION
+
+```{r}
+colnames(listings_fprice_amenities) <- make.names(colnames(listings_fprice_amenities))
+final_dataset <- subset(listings_fprice_amenities,select =c(num_properties.y,price,superhost_score,number_of_reviews,Review_total,Host_review_score,accommodates,contains_Smoke.alarm,contains_Kitchen,contains_Wifi,contains_Essentials,contains_Iron,contains_Hotwater,contains_Hangers,contains_Hairdryer,contains_Dishes.and.silverware,contains_Carbon.monoxide.alarm,contains_Refrigerator,contains_Bed.linens,contains_Cooking.basics,contains_Washer,contains_Microwave,contains_Heating,contains_Shampoo,contains_Hot.water.kettle,contains_Dedicated.workspace,contains_TV,contains_Cleaning.products,Final_score_tier))
+```
+
+```{r}
+train_indices <- sample(seq_len(nrow(final_dataset)), size = 0.75 * nrow(final_dataset), replace = FALSE)
+train_data <- final_dataset[train_indices, ]
+test_data <- final_dataset[-train_indices, ]
+
+# Create training and testing sets
+column_with_na <- "Final_score_tier"
+train_data <- train_data[complete.cases(train_data[, column_with_na]), ]
+```
+
+### MODEL SELECTION:
+
+Due to the nature of the final variable being predicted as 1 of 3 classes, the multinom (aka multiclass logistic regression) is chosen as the primary model. While the models of Decision Trees and Random Forest might suit better in terms of accuracy, the multinom is taken into account because of the nature of the variables and to avoid overfitting at any given instant. \
+
+```{r}
+
+model <- multinom(Final_score_tier ~ ., data = train_data, family = "binomial")
+```
+
+```{r}
+summary(model)
+```
+
+From the confusion matrix, we understand that 1st and 3rd category are more likely to be correctly guessed by the model while the 2nd class might be wrongly predicted. This is happening because certain listings' score are on the border of 25th and 75th percentile respectively due to which these edge cases are causing problems for the model.
+
+### Ways to Tackle the False Predictions of Class 2:
+
+1.  Re-categorize the Final score in a certain manner where the difference between Class 1 and Class 2 variables and between Class 2 and Class 3 is high.
+2.  Add more external data/features to differentiate the listings much more. Variables like distance from the major tourist attractions to the listing etc. This would add more differentiation between the listings thereby the decreasing the chances of such edge cases happening.
+3.  Using Number of Reviews as a proxy to the number of tourists coming in is a major drawback as well, since most customers do not leave a review.
+
+AUC-ROC Curve:
+
+From the **AUC-ROC** Curve, we infer the same as mentioned since the sensitivity of Class 2 is very high.
+
+### PERFORMANCE OF THE MODEL:
+
+The performance of this model is considered to be poor (Accuracy is 80%, Sensitivity for 2nd class is high) given the current standards set in the industry. But given this categorical variable was created out of the existing dataset without external sources of data, and the model predicting the variable, this model would serve as a great baseline for future models.
+
+For better performace, a decision tree classifier along with more qualitative features or a deep learning classifier model can be used (Causing increased computation cost that would need justification from an economic sense).
+
+```{r}
+# Predict on the testing set
+column_with_na <- "Final_score_tier"
+test_data <- test_data[complete.cases(test_data[, column_with_na]), ]
+
+predictions <- predict(model, newdata = test_data, type = "prob")
+
+# Convert predicted probabilities to class predictions
+predicted_classes <- apply(predictions, 1, which.max)
+
+matrix <- confusionMatrix(as.factor(predicted_classes), as.factor(test_data$Final_score_tier))
+matrix
+```
+
+```{r}
+
+# Assuming 'predictions' is a matrix with columns representing each class
+# and 'test_data$Final_score_tier' is a factor with the true class labels
+result <- pROC::multiclass.roc(predicted_classes, 
+                               as.numeric(test_data$Final_score_tier))
+plot.roc(result$rocs[[1]], 
+         print.auc=T,
+         legacy.axes = T)
+plot.roc(result$rocs[[2]],
+         add=T, col = 'red',
+         print.auc = T,
+         legacy.axes = T,
+         print.auc.adj = c(0,3))
+plot.roc(result$rocs[[3]],add=T, col = 'blue',
+         print.auc=T,
+         legacy.axes = T,
+         print.auc.adj = c(0,5))
+
+legend('bottomright',
+       legend = c('1',
+                  '2',
+                  '3'),
+       col=c('black','red','blue'),lwd=2)
+```
+
+```         
+```
