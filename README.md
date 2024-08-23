@@ -64,7 +64,6 @@ A composite score was created based on:
 3. Run the R Markdown file
 
 ## Contributors
-[Your Name]
+Sreeraj Srikanth
 
-## License
-[Specify your license here]
+
